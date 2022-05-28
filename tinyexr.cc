@@ -5,4 +5,5 @@
 #endif
 
 #define TINYEXR_IMPLEMENTATION
+#include "deps/miniz/miniz.c"
 #include "tinyexr.h"

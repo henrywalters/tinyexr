@@ -397,10 +397,10 @@ MINIZ_EXPORT const char *mz_error(int err);
 /* Redefine zlib-compatible names to miniz equivalents, so miniz.c can be used as a drop-in replacement for the subset of zlib that miniz.c supports. */
 /* Define MINIZ_NO_ZLIB_COMPATIBLE_NAMES to disable zlib-compatibility if you use zlib in the same project. */
 #ifndef MINIZ_NO_ZLIB_COMPATIBLE_NAMES
-typedef unsigned char Byte;
+typedef unsigned char Byte_t;
 typedef unsigned int uInt;
 typedef mz_ulong uLong;
-typedef Byte Bytef;
+typedef Byte_t Bytef;
 typedef uInt uIntf;
 typedef char charf;
 typedef int intf;
@@ -933,7 +933,7 @@ typedef struct
     /* Central directory file index. */
     mz_uint32 m_file_index;
 
-    /* Byte offset of this entry in the archive's central directory. Note we currently only support up to UINT_MAX or less bytes in the central dir. */
+    /* Byte_t offset of this entry in the archive's central directory. Note we currently only support up to UINT_MAX or less bytes in the central dir. */
     mz_uint64 m_central_dir_ofs;
 
     /* These fields are copied directly from the zip's central dir. */

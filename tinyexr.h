@@ -617,7 +617,7 @@ extern int LoadEXRFromMemory(float **out_rgba, int *width, int *height,
 #endif
 
 #if TINYEXR_USE_MINIZ
-#include <miniz.h>
+#include "./deps/miniz/miniz.h"
 #else
 //  Issue #46. Please include your own zlib-compatible API header before
 //  including `tinyexr.h`
@@ -5831,7 +5831,7 @@ static void ChannelsInLayer(const EXRHeader &exr_header,
 
 }  // namespace tinyexr
 
-int EXRLayers(const char *filename, const char **layer_names[], int *num_layers,
+int EXRLayers(const char *filename, std::vector<std::string>& layers,
               const char **err) {
   EXRVersion exr_version;
   EXRHeader exr_header;
@@ -5858,19 +5858,7 @@ int EXRLayers(const char *filename, const char **layer_names[], int *num_layers,
     return ret;
   }
 
-  std::vector<std::string> layer_vec;
-  tinyexr::GetLayers(exr_header, layer_vec);
-
-  (*num_layers) = int(layer_vec.size());
-  (*layer_names) = static_cast<const char **>(
-      malloc(sizeof(const char *) * static_cast<size_t>(layer_vec.size())));
-  for (size_t c = 0; c < static_cast<size_t>(layer_vec.size()); c++) {
-#ifdef _MSC_VER
-    (*layer_names)[c] = _strdup(layer_vec[c].c_str());
-#else
-    (*layer_names)[c] = strdup(layer_vec[c].c_str());
-#endif
-  }
+  tinyexr::GetLayers(exr_header, layers);
 
   FreeEXRHeader(&exr_header);
   return TINYEXR_SUCCESS;
@@ -6110,6 +6098,223 @@ int LoadEXRWithLayer(float **out_rgba, int *width, int *height,
   FreeEXRImage(&exr_image);
 
   return TINYEXR_SUCCESS;
+}
+
+int LoadEXRWithLayerXYZ(float** out_rgba, int* width, int* height,
+    const char* filename, const char* layername,
+    const char** err) {
+    if (out_rgba == NULL) {
+        tinyexr::SetErrorMessage("Invalid argument for LoadEXR()", err);
+        return TINYEXR_ERROR_INVALID_ARGUMENT;
+    }
+
+    EXRVersion exr_version;
+    EXRImage exr_image;
+    EXRHeader exr_header;
+    InitEXRHeader(&exr_header);
+    InitEXRImage(&exr_image);
+
+    {
+        int ret = ParseEXRVersionFromFile(&exr_version, filename);
+        if (ret != TINYEXR_SUCCESS) {
+            std::stringstream ss;
+            ss << "Failed to open EXR file or read version info from EXR file. code("
+                << ret << ")";
+            tinyexr::SetErrorMessage(ss.str(), err);
+            return ret;
+        }
+
+        if (exr_version.multipart || exr_version.non_image) {
+            tinyexr::SetErrorMessage(
+                "Loading multipart or DeepImage is not supported  in LoadEXR() API",
+                err);
+            return TINYEXR_ERROR_INVALID_DATA;  // @fixme.
+        }
+    }
+
+    {
+        int ret = ParseEXRHeaderFromFile(&exr_header, &exr_version, filename, err);
+        if (ret != TINYEXR_SUCCESS) {
+            FreeEXRHeader(&exr_header);
+            return ret;
+        }
+    }
+
+    // Read HALF channel as FLOAT.
+    for (int i = 0; i < exr_header.num_channels; i++) {
+        if (exr_header.pixel_types[i] == TINYEXR_PIXELTYPE_HALF) {
+            exr_header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_FLOAT;
+        }
+    }
+
+    // TODO: Probably limit loading to layers (channels) selected by layer index
+    {
+        int ret = LoadEXRImageFromFile(&exr_image, &exr_header, filename, err);
+        if (ret != TINYEXR_SUCCESS) {
+            FreeEXRHeader(&exr_header);
+            return ret;
+        }
+    }
+
+    // RGBA
+    int idxX = -1;
+    int idxY = -1;
+    int idxZ = -1;
+
+    std::vector<std::string> layer_names;
+    tinyexr::GetLayers(exr_header, layer_names);
+
+    std::vector<tinyexr::LayerChannel> channels;
+    tinyexr::ChannelsInLayer(
+        exr_header, layername == NULL ? "" : std::string(layername), channels);
+
+    if (channels.size() < 1) {
+        tinyexr::SetErrorMessage("Layer Not Found", err);
+        FreeEXRHeader(&exr_header);
+        FreeEXRImage(&exr_image);
+        return TINYEXR_ERROR_LAYER_NOT_FOUND;
+    }
+
+    size_t ch_count = channels.size() < 4 ? channels.size() : 4;
+    for (size_t c = 0; c < ch_count; c++) {
+        const tinyexr::LayerChannel& ch = channels[c];
+
+        if (ch.name == "X") {
+            idxX = int(ch.index);
+        }
+        else if (ch.name == "Y") {
+            idxY = int(ch.index);
+        }
+        else if (ch.name == "Z") {
+            idxZ = int(ch.index);
+        }
+    }
+
+    if (channels.size() == 1) {
+        int chIdx = int(channels.front().index);
+        // Grayscale channel only.
+
+        (*out_rgba) = reinterpret_cast<float*>(
+            malloc(3 * sizeof(float) * static_cast<size_t>(exr_image.width) *
+                static_cast<size_t>(exr_image.height)));
+
+        if (exr_header.tiled) {
+            for (int it = 0; it < exr_image.num_tiles; it++) {
+                for (int j = 0; j < exr_header.tile_size_y; j++) {
+                    for (int i = 0; i < exr_header.tile_size_x; i++) {
+                        const int ii = exr_image.tiles[it].offset_x *
+                            static_cast<int>(exr_header.tile_size_x) +
+                            i;
+                        const int jj = exr_image.tiles[it].offset_y *
+                            static_cast<int>(exr_header.tile_size_y) +
+                            j;
+                        const int idx = ii + jj * static_cast<int>(exr_image.width);
+
+                        // out of region check.
+                        if (ii >= exr_image.width) {
+                            continue;
+                        }
+                        if (jj >= exr_image.height) {
+                            continue;
+                        }
+                        const int srcIdx = i + j * exr_header.tile_size_x;
+                        unsigned char** src = exr_image.tiles[it].images;
+                        (*out_rgba)[3 * idx + 0] =
+                            reinterpret_cast<float**>(src)[chIdx][srcIdx];
+                        (*out_rgba)[3 * idx + 1] =
+                            reinterpret_cast<float**>(src)[chIdx][srcIdx];
+                        (*out_rgba)[3 * idx + 2] =
+                            reinterpret_cast<float**>(src)[chIdx][srcIdx];
+                    }
+                }
+            }
+        }
+        else {
+            for (int i = 0; i < exr_image.width * exr_image.height; i++) {
+                const float val =
+                    reinterpret_cast<float**>(exr_image.images)[chIdx][i];
+                (*out_rgba)[3 * i + 0] = val;
+                (*out_rgba)[3 * i + 1] = val;
+                (*out_rgba)[3 * i + 2] = val;
+            }
+        }
+    }
+    else {
+        // Assume RGB(A)
+
+        if (idxX == -1) {
+            tinyexr::SetErrorMessage("X channel not found", err);
+
+            FreeEXRHeader(&exr_header);
+            FreeEXRImage(&exr_image);
+            return TINYEXR_ERROR_INVALID_DATA;
+        }
+
+        if (idxY == -1) {
+            tinyexr::SetErrorMessage("Y channel not found", err);
+            FreeEXRHeader(&exr_header);
+            FreeEXRImage(&exr_image);
+            return TINYEXR_ERROR_INVALID_DATA;
+        }
+
+        if (idxZ == -1) {
+            tinyexr::SetErrorMessage("Z channel not found", err);
+            FreeEXRHeader(&exr_header);
+            FreeEXRImage(&exr_image);
+            return TINYEXR_ERROR_INVALID_DATA;
+        }
+
+        (*out_rgba) = reinterpret_cast<float*>(
+            malloc(3 * sizeof(float) * static_cast<size_t>(exr_image.width) *
+                static_cast<size_t>(exr_image.height)));
+        if (exr_header.tiled) {
+            for (int it = 0; it < exr_image.num_tiles; it++) {
+                for (int j = 0; j < exr_header.tile_size_y; j++) {
+                    for (int i = 0; i < exr_header.tile_size_x; i++) {
+                        const int ii =
+                            exr_image.tiles[it].offset_x * exr_header.tile_size_x + i;
+                        const int jj =
+                            exr_image.tiles[it].offset_y * exr_header.tile_size_y + j;
+                        const int idx = ii + jj * exr_image.width;
+
+                        // out of region check.
+                        if (ii >= exr_image.width) {
+                            continue;
+                        }
+                        if (jj >= exr_image.height) {
+                            continue;
+                        }
+                        const int srcIdx = i + j * exr_header.tile_size_x;
+                        unsigned char** src = exr_image.tiles[it].images;
+                        (*out_rgba)[3 * idx + 0] =
+                            reinterpret_cast<float**>(src)[idxX][srcIdx];
+                        (*out_rgba)[3 * idx + 1] =
+                            reinterpret_cast<float**>(src)[idxY][srcIdx];
+                        (*out_rgba)[3 * idx + 2] =
+                            reinterpret_cast<float**>(src)[idxZ][srcIdx];
+                    }
+                }
+            }
+        }
+        else {
+            for (int i = 0; i < exr_image.width * exr_image.height; i++) {
+                (*out_rgba)[3 * i + 0] =
+                    reinterpret_cast<float**>(exr_image.images)[idxX][i];
+                (*out_rgba)[3 * i + 1] =
+                    reinterpret_cast<float**>(exr_image.images)[idxY][i];
+                (*out_rgba)[3 * i + 2] =
+                    reinterpret_cast<float**>(exr_image.images)[idxZ][i];
+            }
+        }
+    }
+
+    (*width) = exr_image.width;
+    (*height) = exr_image.height;
+
+    FreeEXRHeader(&exr_header);
+    FreeEXRImage(&exr_image);
+
+    return TINYEXR_SUCCESS;
 }
 
 int IsEXR(const char *filename) {

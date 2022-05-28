@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Development\HaGame\HaGame\Vendor\tinyexr\CMakeFiles\d351bdc23a6a85f9a5bf5698c81a4ff2\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{40DE7367-C214-3ED6-BE44-4A4242D12D40}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
